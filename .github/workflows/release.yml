@@ -1,0 +1,138 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release tag (e.g. v0.1.0)"
+        required: true
+        default: "v0.1.0"
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: Build ${{ matrix.label }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-latest
+            slug: macos-aarch64
+            label: macOS Apple Silicon
+            script: flutter build macos --release
+          - os: ubuntu-latest
+            slug: linux-x86_64
+            label: Linux x86_64
+            script: flutter build linux --release
+          - os: ubuntu-latest
+            slug: android-arm64
+            label: Android APK
+            script: flutter build apk --release
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+
+      - name: Linux build deps
+        if: matrix.slug == 'linux-x86_64'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y clang cmake ninja-build pkg-config libgtk-3-dev liblzma-dev
+
+      - run: flutter pub get
+      - run: dart run build_runner build --delete-conflicting-outputs
+      - name: Build
+        run: ${{ matrix.script }}
+
+      - name: Resolve version
+        id: version
+        shell: bash
+        run: |
+          if [[ "${{ github.ref_type }}" == "tag" ]]; then
+            version="${GITHUB_REF#refs/tags/v}"
+          else
+            version="${{ github.event.inputs.tag }}"
+            version="${version#v}"
+          fi
+          echo "value=$version" >> "$GITHUB_OUTPUT"
+
+      - name: Package
+        shell: bash
+        run: |
+          set -euo pipefail
+          version="${{ steps.version.outputs.value }}"
+          slug="${{ matrix.slug }}"
+          stem="localport-${version}-${slug}"
+          mkdir -p "dist/${stem}"
+          case "${slug}" in
+            macos-aarch64)
+              cp -R build/macos/Build/Products/Release/LocalPort.app "dist/${stem}/LocalPort.app"
+              cp LICENSE README.md "dist/${stem}/"
+              tar -czf "dist/${stem}.tar.gz" -C dist "${stem}"
+              ;;
+            linux-x86_64)
+              cp -R build/linux/x64/release/bundle/. "dist/${stem}/"
+              cp LICENSE README.md "dist/${stem}/"
+              tar -czf "dist/${stem}.tar.gz" -C dist "${stem}"
+              ;;
+            android-arm64)
+              cp build/app/outputs/flutter-apk/app-release.apk "dist/${stem}/LocalPort.apk"
+              cp LICENSE README.md "dist/${stem}/"
+              tar -czf "dist/${stem}.tar.gz" -C dist "${stem}"
+              ;;
+          esac
+          echo "ASSET=dist/${stem}.tar.gz" >> "$GITHUB_ENV"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.slug }}
+          path: ${{ env.ASSET }}
+
+  release:
+    name: Publish GitHub Release
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: Resolve release tag
+        id: tag
+        shell: bash
+        run: |
+          if [[ "${{ github.ref_type }}" == "tag" ]]; then
+            tag="${GITHUB_REF#refs/tags/}"
+          else
+            tag="${{ github.event.inputs.tag }}"
+          fi
+          echo "value=$tag" >> "$GITHUB_OUTPUT"
+
+      - name: Generate checksums
+        run: |
+          cd dist
+          shasum -a 256 *.tar.gz > SHA256SUMS.txt
+
+      - uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.tag.outputs.value }}
+          name: ${{ steps.tag.outputs.value }}
+          generate_release_notes: true
+          files: |
+            dist/*.tar.gz
+            dist/SHA256SUMS.txt
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
