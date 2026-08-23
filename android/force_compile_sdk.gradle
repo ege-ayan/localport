@@ -1,8 +1,7 @@
 subprojects { subproject ->
-    subproject.afterEvaluate {
-        if (!subproject.plugins.hasPlugin("com.android.library")) {
-            return
-        }
+    // withPlugin runs now if the plugin is already applied, otherwise when it is.
+    // afterEvaluate cannot run after evaluationDependsOn(":app").
+    subproject.pluginManager.withPlugin("com.android.library") {
         subproject.android.compileSdkVersion 36
     }
 }
