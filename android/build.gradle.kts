@@ -19,6 +19,9 @@ subprojects {
     project.evaluationDependsOn(":app")
 }
 
+// Stale plugins (desktop_drop 0.6.x, …) pin compileSdk 33 while AndroidX now needs 34+.
+apply(from = "force_compile_sdk.gradle")
+
 tasks.register<Delete>("clean") {
     delete(rootProject.layout.buildDirectory)
 }

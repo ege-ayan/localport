@@ -1,0 +1,8 @@
+subprojects { subproject ->
+    subproject.afterEvaluate {
+        if (!subproject.plugins.hasPlugin("com.android.library")) {
+            return
+        }
+        subproject.android.compileSdkVersion 36
+    }
+}
